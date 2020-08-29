@@ -1,0 +1,190 @@
+---
+title: "Modelling and Predicting Exercise Type from Human Activity Recognition Data"
+author: "AO"
+date: "26/08/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, include = FALSE}
+#install.packages("caret")
+#install.packages("randomForest")
+#install.packages("rattle")
+#install.packages("e1071")
+#install.packages("partykit")
+#install.packages("rpart")
+#install.packages("rpart.plot")
+```
+
+## Introduction and Summary
+
+Human Activity Recognition is a key research area. People regularly quantify how much of a particular activity they do, but not how well they do it. In this project, we use data from accelerometers on the belt, forearm and dumbell of 6 particupants to predict the manner in which they did the exercise.
+
+The outcome variable to be predicted is classe, a factor variable.
+
+## Loading packages and reading the data
+
+```{r, results = "hide"}
+library(tidyverse)
+library(caret)
+library(rattle)
+library(e1071)
+library(rpart)
+library(rpart.plot)
+```
+We check to see if the files exist and download them if not.
+```{r}
+if (!file.exists("pml-training.csv")) {
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+  destfile = "pml-training.csv")
+}
+if (!file.exists("pml-testing.csv")) {
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+  destfile = "pml-testing.csv")
+}
+training_data <- read.csv("pml-training.csv",na.strings=c("NA","#DIV/0!", ""))
+testing_data <- read.csv("pml-testing.csv",na.strings=c("NA","#DIV/0!", ""))
+```
+
+Viewing the structure of the training data
+```{r, results = "hide"}
+str(training_data)
+```
+Our training dataset has 19622 observations and 160 variables. Let's reduce the variable number if possible.
+```{r}
+dim(training_data)
+```
+```{r}
+dim(testing_data)
+```
+
+
+## Data Processing
+
+There are a lot of variables with primarily NAs. We remove these.
+```{r}
+table(is.na(training_data))
+```
+
+Removing variables with all missing data
+```{r}
+training_data <- training_data[,colSums(is.na(training_data)) == 0]
+testing_data <- testing_data[,colSums(is.na(testing_data)) == 0]
+```
+
+
+Removing variables with variance near zero
+```{r}
+low_var <- nearZeroVar(training_data, saveMetrics = TRUE)
+trainingData <- training_data[,low_var$low_var == "FALSE"]
+training_data$classe <- as.factor(training_data$classe)
+
+```
+
+Removing the first 7 variables after viewing column names.
+```{r}
+training_data <- training_data[,-c(1:7)]
+testing_data <- testing_data[, -c(1:7)]
+```
+
+We have reduced variable number from 160 to 53.
+```{r}
+dim(training_data)
+```
+Let's have a look at our data by the prediction variable
+```{r}
+training_data %>% ggplot(aes(x = classe)) + 
+  geom_bar() + 
+  ggtitle("Training Data - Count of Records by Classe")
+```
+Classe A has the most recordings but as they are all within the same order of magnitude it should not impact our model.
+
+## Data Partitioning for Cross-Validation
+
+Let's split the training data into a training set to train the model (75% of the data), and a test set to predict the out of sample error for cross-validation. We will split on the variable of interest (classe). Once the model is optimised, it will be used on the original testing data. 
+
+```{r}
+set.seed(123)
+inTrain <- createDataPartition(y = training_data$classe, p=.75, list = FALSE) #Partitioning our training data for cross-validation
+training <- training_data[inTrain, ]
+testing <- training_data[-inTrain, ]
+```
+
+## Model Building and Additional Cross-Validation
+
+We first try a random forest model as they are usually one of the top performing models.
+
+We allow for parallel processing. We accept there might be some over-fitting with a random forest model, and will also try a decision tree later on.
+
+Let's build this model with re-sampling method and 5-fold cross-validation.
+
+```{r,cache=TRUE}
+set.seed(123)
+rFModel <- train(classe ~., method = "rf", data = training, 
+                 trControl = trainControl(method = "cv", number = 5), #5-fold cross-validation
+                 prox = TRUE, allowParallel = TRUE)
+```
+Let's look at our random forest model
+```{r}
+rFModel
+```
+We will assess the accuracy of the random forest model in the next section, but now let's also look at a decision tree model. Tree models iteratively split variables into groups and are easy to interpret.
+```{r}
+set.seed(123)
+dtModel <- rpart(classe ~ ., data=training, method="class")
+```
+
+```{r}
+fancyRpartPlot(dtModel)
+```
+
+## Model Accuracy and Out of Sample Error
+
+We test our model on the partitioned test data sub-set from our original training set with a confusion matrix.
+```{r}
+rFModel_test <- predict(rFModel, testing)
+confusionMatrix(testing$classe,rFModel_test)
+```
+```{r}
+rf_accuracy <- confusionMatrix(testing$classe, rFModel_test)$overall[1]
+rf_accuracy
+```
+
+```{r}
+out_of_sample_error <- 1- rf_accuracy
+out_of_sample_error
+```
+```{r}
+plot(rFModel)
+```
+
+
+The prediction accuracy is (rounded to three decimal places) 99.429% and the out of sample error is 0.571%. This is a high level of accuracy with a 95% confidence interval that the accuracy falls between 99.18% and 99.62%.
+
+Let's look at the thirty most important variables for our model.
+```{r}
+plot(varImp(rFModel), top = 30)
+```
+Let's look at our decision tree model with a confusion matrix
+```{r}
+dtModel_test <- predict(dtModel, testing, type = "class")
+confusionMatrix(testing$classe, dtModel_test)
+```
+The accuracy for this decision tree model is 73.76% (95% confidence interval that it lies between 72.5% and 74.98%), ar lower than with the random forest approach. This would yield a much higher out of sample error. We will therefore disregard this model and proceed with the random forest model.
+
+## Prediction
+
+Our random forest model is sufficiently accurate to run on our original testing data. Results are hidden here to adhere to Coursera's honour code.
+```{r, results = "hide"}
+quiz_prediction <- predict(rFModel, testing_data)
+quiz_prediction
+```
+## Conclusion
+
+We used two types of models to predict the exercise type and found random forest to give us predictions with a high level of accuracy.
+
+
